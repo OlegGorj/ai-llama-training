@@ -48,13 +48,33 @@ COMPLETION_TEMPLATE = """module "{module_name}" {{
 }}"""
 
 # Function to generate a fake resource block (for simulation)
-def generate_fake_resource(module_name, reference):
+def generate_fake_resource(module_name, reference, error_type=None):
     code_lines = [f'resource \"{module_name.replace("/", "_")}_resource\" \"example\" {{']
-    for param in reference["mandatory_parameters"]:
+    params = reference["mandatory_parameters"].copy()
+    
+    if error_type == "missing_params":
+        params = random.sample(params, max(1, len(params) - 2))
+    for param in params:
         if param == "tags":
-            code_lines.append("  tags = {}")
+            if error_type == "wrong_tags":
+                code_lines.append("  tags = { App = \"MyApp\" }")
+            else:
+                code_lines.append("  tags = {}")
         else:
-            code_lines.append(f"  {param} = \"example\"")
+            if error_type == "wrong_defaults" and param in reference.get("defaults", {}):
+                wrong_value = "TLS1_0" if param == "min_tls_version" else "example_wrong"
+                code_lines.append(f"  {param} = \"{wrong_value}\"")
+            else:
+                code_lines.append(f"  {param} = \"example\"")
+    code_lines.append("}")
+    return "\n".join(code_lines)
+
+def generate_partial_module(module_name, reference):
+    code_lines = [f'module \"{module_name.split("/")[-1]}\" {{']
+    code_lines.append(f'  source = \"../modules/{module_name}\"')
+    params = random.sample(reference["mandatory_parameters"], max(1, len(reference["mandatory_parameters"]) - 1))
+    for param in params:
+        code_lines.append(f"  {param} = \"example\"")
     code_lines.append("}")
     return "\n".join(code_lines)
 
@@ -75,17 +95,35 @@ def generate_completion(module_name, reference):
     )
 
 # Main generator
-
 def generate_dataset():
     samples = []
     for module_path, reference in GOLDEN_REFERENCES.items():
+        # 1. Direct resource usage
         fake_code = generate_fake_resource(module_path, reference)
-        completion = generate_completion(module_path, reference)
         prompt = PROMPT_TEMPLATE.format(code=fake_code, module_path=module_path)
-        samples.append({
-            "input": prompt.strip(),
-            "output": completion.strip()
-        })
+        completion = generate_completion(module_path, reference)
+        samples.append({"input": prompt.strip(), "output": completion.strip()})
+
+        # 2. Missing parameters
+        fake_code = generate_fake_resource(module_path, reference, error_type="missing_params")
+        prompt = PROMPT_TEMPLATE.format(code=fake_code, module_path=module_path)
+        samples.append({"input": prompt.strip(), "output": completion.strip()})
+
+        # 3. Wrong default values
+        fake_code = generate_fake_resource(module_path, reference, error_type="wrong_defaults")
+        prompt = PROMPT_TEMPLATE.format(code=fake_code, module_path=module_path)
+        samples.append({"input": prompt.strip(), "output": completion.strip()})
+
+        # 4. Wrong or missing tags
+        fake_code = generate_fake_resource(module_path, reference, error_type="wrong_tags")
+        prompt = PROMPT_TEMPLATE.format(code=fake_code, module_path=module_path)
+        samples.append({"input": prompt.strip(), "output": completion.strip()})
+
+        # 5. Partial module usage
+        partial_module_code = generate_partial_module(module_path, reference)
+        prompt = PROMPT_TEMPLATE.format(code=partial_module_code, module_path=module_path)
+        samples.append({"input": prompt.strip(), "output": completion.strip()})
+
     return samples
 
 # Write to JSONL
